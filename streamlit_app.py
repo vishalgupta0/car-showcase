@@ -1,101 +1,179 @@
-import os
-pjoin = os.path.join
+import yfinance as yf
+import streamlit as st
+import datetime 
+import matplotlib.pyplot as plt
+import talib 
+import ta
+import numpy as np
+import matplotlib.ticker as mticker
+import pandas as pd
+import requests
+yf.pdr_override()
 
-from setuptools import setup, find_packages
+st.write("""
+# Technical Analysis Web Application
+Shown below are the **Moving Average Crossovers**, **Bollinger Bands**, **MACD's**, **Commodity Channel Indexes**, **Relative Strength Indexes** and **Extended Market Calculators** of any stock!
+""")
 
-here = os.path.abspath(os.path.dirname(__file__))
+st.sidebar.header('User Input Parameters')
 
-__version__ = None
-exec(open(pjoin(here,'cdsdashboards/version.py')).read()) # Load __version__
+today = datetime.date.today()
+def user_input_features():
+    ticker = st.sidebar.text_input("Ticker", 'AAPL')
+    start_date = st.sidebar.text_input("Start Date", '2019-01-01')
+    end_date = st.sidebar.text_input("End Date", f'{today}')
+    return ticker, start_date, end_date
 
-install_requires = [
-    'tornado>=6.0.4', # Mainly for jhsingle-native-proxy but best to keep consistent
-    'traitlets',
-    'jupyterhub>=1.0.0',
-    'alembic',
-    'pluggy'
-]
+symbol, start, end = user_input_features()
 
-extras_require = {
-    'user': [
-        'jhsingle-native-proxy>=0.7.6',
-        'plotlydash-tornado-cmd>=0.0.6',
-        'bokeh-root-cmd>=0.1.2',
-        'rshiny-server-cmd>=0.0.2'
-    ],
-    'sudospawner': [
-        "sudospawner>=0.5.2"
-    ]
-}
+def get_symbol(symbol):
+    url = "http://d.yimg.com/autoc.finance.yahoo.com/autoc?query={}&region=1&lang=en".format(symbol)
+    result = requests.get(url).json()
+    for x in result['ResultSet']['Result']:
+        if x['symbol'] == symbol:
+            return x['name']
+company_name = get_symbol(symbol.upper())
 
-with open(pjoin(here, 'README.md'), encoding="utf8") as f:
-    readme = f.read().replace('./docs/_static/screenshots/', 'https://github.com/ideonate/cdsdashboards/raw/master/docs/_static/screenshots/')
+start = pd.to_datetime(start)
+end = pd.to_datetime(end)
 
-setup_metadata=dict(
-    version=__version__,
-    python_requires='>=3.6',
-    author='Ideonate',
-    author_email='dan@containds.com',
-    license='BSD',
-    url='https://github.com/ideonate/cdsdashboards',
-    # this should be a whitespace separated string of keywords, not a list
-    keywords="containds jupyterhub",
-    classifiers=[
-        'Intended Audience :: Developers',
-        'Intended Audience :: System Administrators',
-        'Intended Audience :: Science/Research',
-        'License :: OSI Approved :: BSD License',
-        'Programming Language :: Python',
-        'Programming Language :: Python :: 3',
-    ],
-    project_urls={
-        'Source': 'https://github.com/ideonate/cdsdashboards',
-        'Tracker': 'https://github.com/ideonate/cdsdashboards/issues'
-    },
-    long_description=readme,
-    long_description_content_type='text/markdown',
-    platforms="Linux, Mac OS X",
-    description="ContainDS Dashboards extension for JupyterHub"
-    )
+# Read data 
+data = yf.download(symbol,start,end)
 
-# Data files e.g. templates and static js
+# Adjusted Close Price
+st.header(f"""
+          Adjusted Close Price\n {company_name}
+          """)
+st.line_chart(data['Adj Close'])
 
-share_cdsdashboards = pjoin(here, 'share', 'cdsdashboards')
+# ## SMA and EMA
+#Simple Moving Average
+data['SMA'] = talib.SMA(data['Adj Close'], timeperiod = 20)
 
-def get_data_files():
-    """Get data files in share/cdsdashboards"""
+# Exponential Moving Average
+data['EMA'] = talib.EMA(data['Adj Close'], timeperiod = 20)
 
-    data_files = []
-    ntrim = len(here + os.path.sep)
+# Plot
+st.header(f"""
+          Simple Moving Average vs. Exponential Moving Average\n {company_name}
+          """)
+st.line_chart(data[['Adj Close','SMA','EMA']])
 
-    for (d, _, filenames) in os.walk(share_cdsdashboards):
-        data_files.append((d[ntrim:], [pjoin(d, f)[ntrim:] for f in filenames]))
-    return data_files
+# Bollinger Bands
+data['upper_band'], data['middle_band'], data['lower_band'] = talib.BBANDS(data['Adj Close'], timeperiod =20)
 
-def get_package_data():
-    """Get package data
+# Plot
+st.header(f"""
+          Bollinger Bands\n {company_name}
+          """)
+st.line_chart(data[['Adj Close','upper_band','middle_band','lower_band']])
 
-    (mostly alembic config)
-    """
-    package_data = {}
-    package_data['cdsdashboards'] = ['alembic.ini', 'cdsalembic/*', 'cdsalembic/versions/*']
-    return package_data
+# ## MACD (Moving Average Convergence Divergence)
+# MACD
+data['macd'], data['macdsignal'], data['macdhist'] = talib.MACD(data['Adj Close'], fastperiod=12, slowperiod=26, signalperiod=9)
 
+# Plot
+st.header(f"""
+          Moving Average Convergence Divergence\n {company_name}
+          """)
+st.line_chart(data[['macd','macdsignal']])
 
-setup_metadata.update(dict(
-    name='cdsdashboards',
-    packages=find_packages(),
-    package_data=get_package_data(),
-    data_files=get_data_files(),
-    install_requires=install_requires,
-    extras_require=extras_require
-))
+## CCI (Commodity Channel Index)
+# CCI
+cci = ta.trend.cci(data['High'], data['Low'], data['Close'], n=31, c=0.015)
 
-setup_metadata.update(dict(
-    entry_points={
-        'console_scripts': ['cds_sudospawner=cdsdashboards.hubextension.spawners.variablesudospawner:mediator']
-    }))
+# Plot
+st.header(f"""
+          Commodity Channel Index\n {company_name}
+          """)
+st.line_chart(cci)
 
-setup(
-    **setup_metadata
-)
+# ## RSI (Relative Strength Index)
+# RSI
+data['RSI'] = talib.RSI(data['Adj Close'], timeperiod=14)
+
+# Plot
+st.header(f"""
+          Relative Strength Index\n {company_name}
+          """)
+st.line_chart(data['RSI'])
+
+# ## OBV (On Balance Volume)
+# OBV
+data['OBV'] = talib.OBV(data['Adj Close'], data['Volume'])/10**6
+
+# Plot
+st.header(f"""
+          On Balance Volume\n {company_name}
+          """)
+st.line_chart(data['OBV'])
+
+# Extended Market
+fig, ax1 = plt.subplots() 
+
+#Asks for stock ticker
+sma = 50
+limit = 10
+
+data = yf.download(symbol,start, today)
+
+#calculates sma and creates a column in the dataframe
+data['SMA'+str(sma)] = data.iloc[:,4].rolling(window=sma).mean() 
+data['PC'] = ((data["Adj Close"]/data['SMA'+str(sma)])-1)*100
+
+mean = round(data["PC"].mean(), 2)
+stdev = round(data["PC"].std(), 2)
+current= round(data["PC"][-1], 2)
+yday= round(data["PC"][-2], 2)
+
+stats = [['Mean', mean], ['Standard Deviation', stdev], ['Current', current], ['Yesterday', yday]]
+
+frame = pd.DataFrame(stats,
+                   columns = ['Statistic', 'Value'])
+
+st.header(f"""
+          Extended Market Calculator\n {company_name}
+          """)
+st.dataframe(frame.style.hide_index())
+
+# fixed bin size
+bins = np.arange(-100, 100, 1) 
+plt.rcParams['figure.figsize'] = 15, 10
+plt.xlim([data["PC"].min()-5, data["PC"].max()+5])
+
+plt.hist(data["PC"], bins=bins, alpha=0.5)
+plt.title(symbol+"-- % From "+str(sma)+" SMA Histogram since "+str(start.year))
+plt.xlabel('Percent from '+str(sma)+' SMA (bin size = 1)')
+plt.ylabel('Count')
+
+plt.axvline( x=mean, ymin=0, ymax=1, color='k', linestyle='--')
+plt.axvline( x=stdev+mean, ymin=0, ymax=1, color='gray', alpha=1, linestyle='--')
+plt.axvline( x=2*stdev+mean, ymin=0, ymax=1, color='gray',alpha=.75, linestyle='--')
+plt.axvline( x=3*stdev+mean, ymin=0, ymax=1, color='gray', alpha=.5, linestyle='--')
+plt.axvline( x=-stdev+mean, ymin=0, ymax=1, color='gray', alpha=1, linestyle='--')
+plt.axvline( x=-2*stdev+mean, ymin=0, ymax=1, color='gray',alpha=.75, linestyle='--')
+plt.axvline( x=-3*stdev+mean, ymin=0, ymax=1, color='gray', alpha=.5, linestyle='--')
+
+plt.axvline( x=current, ymin=0, ymax=1, color='r', label = 'today')
+plt.axvline( x=yday, ymin=0, ymax=1, color='blue', label = 'yesterday')
+
+#add more x axis labels
+ax1.xaxis.set_major_locator(mticker.MaxNLocator(14)) 
+
+st.pyplot(fig)
+
+#Create Plots
+fig2, ax2 = plt.subplots() 
+
+data=data[-150:]
+
+data['PC'].plot(label='close',color='k')
+plt.title(symbol+"-- % From "+str(sma)+" SMA Over last 100 days")
+plt.xlabel('Date') 
+plt.ylabel('Percent from '+str(sma)+' EMA')
+
+#add more x axis labels
+ax2.xaxis.set_major_locator(mticker.MaxNLocator(8)) 
+plt.axhline( y=limit, xmin=0, xmax=1, color='r')
+plt.rcParams['figure.figsize'] = 15, 10
+st.pyplot(fig2)
